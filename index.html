@@ -16,24 +16,25 @@
         .col { flex: 1; min-width: 200px; }
         
         label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 14px; }
-        select { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #ccc; background: #fff; }
+        select { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
         
         .btn-group { display: flex; gap: 10px; margin-top: 10px; }
         .btn { padding: 10px 18px; border: none; border-radius: 5px; cursor: pointer; color: white; font-weight: bold; transition: 0.2s; }
         .btn-png { background: #27ae60; } .btn-png:hover { background: #219150; }
         .btn-csv { background: #f39c12; } .btn-csv:hover { background: #d68910; }
         
-        #chartWrapper { height: 550px; position: relative; }
+        #chartWrapper { height: 550px; position: relative; margin-top: 20px; }
         .footer { margin-top: 25px; text-align: center; font-size: 13px; color: #888; border-top: 1px solid #eee; padding-top: 15px; }
+        #loader { text-align: center; padding: 50px; font-weight: bold; color: #1a508b; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <h1>Průměrné ceny zemědělských výrobků (v Kč)</h1>
-    <div class="subtitle">Interaktivní srovnání cen v čase</div>
+    <div class="subtitle">Interaktivní srovnání cen v čase podle dat ČSÚ</div>
     
-    <div id="loader" style="text-align:center; padding: 50px;">⌛ Načítám data...</div>
+    <div id="loader">⌛ Načítám a připravuji data z data.csv...</div>
     
     <div class="controls" id="controls" style="display:none;">
         <div class="row">
@@ -61,8 +62,8 @@
         </div>
 
         <div class="btn-group">
-            <button class="btn btn-png" onclick="downloadChart()">🖼️ Uložit graf</button>
-            <button class="btn btn-csv" onclick="downloadCSV()">📊 Exportovat data</button>
+            <button class="btn btn-png" onclick="downloadChart()">🖼️ Uložit graf jako obrázek</button>
+            <button class="btn btn-csv" onclick="downloadCSV()">📊 Exportovat data do Excelu</button>
         </div>
     </div>
 
@@ -76,6 +77,7 @@
 </div>
 
 <script>
+    // Načítání lokálního souboru s cache-busterem
     const DATA_URL = 'data.csv?v=' + new Date().getTime();
     let rawData = [];
     let myChart = null;
@@ -85,14 +87,18 @@
         header: true,
         skipEmptyLines: true,
         complete: function(results) {
-            // Základní očištění dat
+            // Očištění dat (pouze celorepublikové měsíční průměry)
             rawData = results.data.filter(row => {
                 const mesic = String(row["CASMKMQR"] || "");
                 const kraj = String(row["ČR a kraje-Kraj"] || "").trim();
                 return row["Reprezentant"] && mesic.length === 7 && (kraj === "" || kraj === "null");
             });
 
-            setupInterface();
+            if (rawData.length > 0) {
+                setupInterface();
+            } else {
+                document.getElementById('loader').innerHTML = "<b style='color:red'>Chyba: Nepodařilo se zpracovat data. Zkontrolujte soubor data.csv.</b>";
+            }
         }
     });
 
@@ -115,12 +121,12 @@
             dt.add(new Option(d, d));
         });
 
-        // Výchozí hodnoty
+        // Nastavení výchozích hodnot (celý rozsah, první produkt)
         df.value = dates[0];
         dt.value = dates[dates.length - 1];
         s1.value = products[0];
 
-        // Eventy
+        // Reakce na změny výběru
         [s1, s2, df, dt].forEach(el => el.addEventListener('change', updateChart));
 
         document.getElementById('loader').style.display = 'none';
@@ -134,7 +140,6 @@
         const from = document.getElementById('dateFrom').value;
         const to = document.getElementById('dateTo').value;
 
-        // Pomocná funkce pro filtraci a přípravu dat
         const getSeries = (pName) => {
             if (!pName) return null;
             return rawData
@@ -147,24 +152,26 @@
 
         const labels = data1.map(r => r["Měsíce, jejich kumulace, čtvrtletí, roky"]);
         const datasets = [{
-            label: p1,
+            label: p1 + " (Kč)",
             data: data1.map(r => parseFloat(String(r["Hodnota"]).replace(',', '.'))),
             borderColor: '#1a508b',
             backgroundColor: 'rgba(26, 80, 139, 0.1)',
             borderWidth: 3,
             fill: true,
-            tension: 0.2
+            tension: 0.2,
+            pointRadius: 2
         }];
 
-        if (data2 && p2 !== "") {
+        if (data2 && p2 !== "" && p2 !== p1) {
             datasets.push({
-                label: p2,
+                label: p2 + " (Kč)",
                 data: data2.map(r => parseFloat(String(r["Hodnota"]).replace(',', '.'))),
                 borderColor: '#e74c3c',
                 backgroundColor: 'rgba(231, 76, 60, 0.05)',
                 borderWidth: 3,
                 fill: true,
-                tension: 0.2
+                tension: 0.2,
+                pointRadius: 2
             });
         }
 
@@ -178,7 +185,7 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 scales: { 
-                    y: { beginAtZero: true, title: { display: true, text: 'Kč' } },
+                    y: { beginAtZero: true, title: { display: true, text: 'Cena v Kč' } },
                     x: { ticks: { maxTicksLimit: 12 } }
                 },
                 plugins: {
@@ -190,25 +197,43 @@
     }
 
     function downloadChart() {
+        const p1 = document.getElementById('prod1').value;
         const link = document.createElement('a');
-        link.download = 'graf-ceny.png';
+        link.download = `graf-ceny-${p1}.png`;
         link.href = document.getElementById('priceChart').toDataURL('image/png');
         link.click();
     }
 
     function downloadCSV() {
         const p1 = document.getElementById('prod1').value;
+        const p2 = document.getElementById('prod2').value;
         const from = document.getElementById('dateFrom').value;
         const to = document.getElementById('dateTo').value;
-        const filtered = rawData.filter(r => r["Reprezentant"] === p1 && r["CASMKMQR"] >= from && r["CASMKMQR"] <= to);
-        
-        let csv = "\ufeffObdobí;Produkt;Cena (Kč)\n";
-        filtered.forEach(r => csv += `${r["Měsíce, jejich kumulace, čtvrtletí, roky"]};${r["Reprezentant"]};${r["Hodnota"]}\n`);
+
+        // Záhlaví CSV
+        let csv = "\ufeffObdobí;Cena: " + p1 + " (Kč)";
+        if (p2 && p2 !== "") csv += ";Cena: " + p2 + " (Kč)";
+        csv += "\n";
+
+        // Unikátní seznam měsíců v rozsahu
+        const rangeDates = [...new Set(rawData
+            .filter(r => r["CASMKMQR"] >= from && r["CASMKMQR"] <= to)
+            .map(r => r["CASMKMQR"])
+        )].sort();
+
+        rangeDates.forEach(mesic => {
+            const row1 = rawData.find(r => r["Reprezentant"] === p1 && r["CASMKMQR"] === mesic);
+            const row2 = (p2 && p2 !== "") ? rawData.find(r => r["Reprezentant"] === p2 && r["CASMKMQR"] === mesic) : null;
+
+            let line = `${mesic};${row1 ? row1["Hodnota"] : ""}`;
+            if (p2 && p2 !== "") line += `;${row2 ? row2["Hodnota"] : ""}`;
+            csv += line + "\n";
+        });
         
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement("a");
         link.href = URL.createObjectURL(blob);
-        link.setAttribute("download", "export-dat.csv");
+        link.setAttribute("download", `export-ceny-${p1}.csv`);
         link.click();
     }
 </script>
