@@ -2,41 +2,27 @@
 <html lang="cs">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ceny zemědělských výrobků ČSÚ</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f8f9fa; color: #333; }
-        .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
-        h1 { color: #1a508b; text-align: center; margin-bottom: 10px; }
-        .info { text-align: center; color: #666; margin-bottom: 30px; font-size: 0.9em; }
+        body { font-family: sans-serif; margin: 20px; background-color: #f8f9fa; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
         .controls { margin-bottom: 25px; background: #e9ecef; padding: 20px; border-radius: 10px; }
-        label { display: block; margin-bottom: 8px; font-weight: bold; color: #444; }
-        select { padding: 12px; font-size: 16px; width: 100%; border-radius: 8px; border: 1px solid #ced4da; background-color: white; margin-bottom: 15px; }
-        .button-group { display: flex; gap: 10px; flex-wrap: wrap; }
-        .btn { padding: 10px 15px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; text-decoration: none; font-size: 14px; }
-        .btn-png { background-color: #27ae60; color: white; }
-        .btn-csv { background-color: #f39c12; color: white; }
-        .loading-overlay { text-align: center; padding: 50px; font-size: 1.2em; color: #1a508b; }
-        #chartWrapper { position: relative; height: 500px; width: 100%; margin-top: 20px; }
+        select { padding: 12px; width: 100%; border-radius: 8px; border: 1px solid #ced4da; }
+        #debug { background: #fff3cd; padding: 10px; margin-bottom: 10px; border: 1px solid #ffeeba; display: none; font-size: 12px; white-space: pre-wrap; }
+        #chartWrapper { height: 500px; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <h1>Průměrné ceny zemědělských výrobků</h1>
-    <div class="info">Zdroj dat: Lokální kopie otevřených dat ČSÚ</div>
-    
-    <div id="loader" class="loading-overlay">⚙️ Zpracovávám data...</div>
+    <div id="debug"></div>
+    <div id="loader">⚙️ Načítám a analyzuji data...</div>
     
     <div class="controls" id="controls" style="display:none;">
-        <label for="productSelect">Vyberte zemědělský výrobek:</label>
         <select id="productSelect"></select>
-        <div class="button-group">
-            <button class="btn btn-png" onclick="downloadChart()">🖼️ Uložit graf</button>
-            <button class="btn btn-csv" onclick="downloadCSV()">📊 Exportovat data</button>
-        </div>
     </div>
 
     <div id="chartWrapper">
@@ -45,61 +31,79 @@
 </div>
 
 <script>
-    // ZMĚNA: Teď načítáme přímo soubor ze stejné složky
-    const DATA_FILE = 'data.csv'; 
+    // Použijeme relativní cestu, ale s "cache-busterem" (ten čas na konci),
+    // aby prohlížeč nestahoval starou verzi souboru.
+    const DATA_URL = 'data.csv?v=' + new Date().getTime(); 
     
     let rawData = [];
     let myChart = null;
-    let currentFilteredData = [];
 
-    Papa.parse(DATA_FILE, {
+    function log(msg) {
+        const d = document.getElementById('debug');
+        d.style.display = 'block';
+        d.innerText += msg + '\n';
+    }
+
+    Papa.parse(DATA_URL, {
         download: true,
         header: true,
         dynamicTyping: true,
         skipEmptyLines: true,
         complete: function(results) {
-            processData(results.data);
-            document.getElementById('loader').style.display = 'none';
-            document.getElementById('controls').style.display = 'block';
+            log("Soubor načten. Počet řádků: " + results.data.length);
+            
+            if (results.data.length > 0) {
+                // Kontrola názvů sloupců (vypíše je do žlutého boxu)
+                log("Nalezené sloupce: " + Object.keys(results.data[0]).join(', '));
+                processData(results.data);
+            } else {
+                log("CHYBA: Soubor je prázdný nebo má špatný formát.");
+            }
         },
-        error: function() {
-            document.getElementById('loader').innerHTML = "<b style='color:red'>Chyba: Soubor data.csv nebyl nalezen!</b>";
+        error: function(err) {
+            log("CHYBA při načítání: " + err);
         }
     });
 
     function processData(data) {
+        // Filtrování: Musíme se trefit do přesných názvů sloupců v data.csv
         rawData = data.filter(row => 
             row["ČR a kraje-Stát"] === "CZ" && 
-            row["ČR a kraje-Kraj"] === "" && 
             row["CASMKMQR"] && 
-            row["CASMKMQR"].toString().length === 7 && 
-            !row["CASMKMQR"].toString().includes('K') &&
-            row["CASMKMQR"] >= "2015-01"
+            row["CASMKMQR"].toString().length === 7
         );
 
-        const products = [...new Set(rawData.map(row => row["Reprezentant"]))].sort();
+        log("Počet řádků po odfiltrování: " + rawData.length);
+
+        const products = [...new Set(rawData.map(row => row["Reprezentant"]))].filter(Boolean).sort();
         const select = document.getElementById('productSelect');
         
+        if (products.length === 0) {
+            log("CHYBA: Nepodařilo se najít žádné produkty. Zkontroluj názvy sloupců v CSV!");
+            return;
+        }
+
         products.forEach(p => {
-            if(p) {
-                const opt = document.createElement('option');
-                opt.value = p;
-                opt.textContent = p;
-                select.appendChild(opt);
-            }
+            const opt = document.createElement('option');
+            opt.value = p;
+            opt.textContent = p;
+            select.appendChild(opt);
         });
 
+        document.getElementById('loader').style.display = 'none';
+        document.getElementById('controls').style.display = 'block';
+
         select.addEventListener('change', () => updateChart(select.value));
-        if(products.length > 0) updateChart(products[0]);
+        updateChart(products[0]);
     }
 
     function updateChart(productName) {
-        currentFilteredData = rawData
+        const productData = rawData
             .filter(row => row["Reprezentant"] === productName)
             .sort((a, b) => a["CASMKMQR"].toString().localeCompare(b["CASMKMQR"].toString()));
 
-        const labels = currentFilteredData.map(row => row["Měsíce, jejich kumulace, čtvrtletí, roky"]);
-        const prices = currentFilteredData.map(row => row["Hodnota"]);
+        const labels = productData.map(row => row["Měsíce, jejich kumulace, čtvrtletí, roky"]);
+        const prices = productData.map(row => row["Hodnota"]);
 
         const ctx = document.getElementById('priceChart').getContext('2d');
         if (myChart) myChart.destroy();
@@ -109,45 +113,20 @@
             data: {
                 labels: labels,
                 datasets: [{
-                    label: 'Cena v Kč',
+                    label: productName,
                     data: prices,
                     borderColor: '#1a508b',
                     backgroundColor: 'rgba(26, 80, 139, 0.1)',
-                    borderWidth: 3,
                     fill: true,
-                    tension: 0.1,
-                    pointRadius: 2
+                    tension: 0.1
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                scales: { 
-                    y: { beginAtZero: true },
-                    x: { ticks: { maxTicksLimit: 15 } }
-                }
+                scales: { y: { beginAtZero: true } }
             }
         });
-    }
-
-    function downloadChart() {
-        const link = document.createElement('a');
-        link.download = `graf-${document.getElementById('productSelect').value}.png`;
-        link.href = document.getElementById('priceChart').toDataURL('image/png');
-        link.click();
-    }
-
-    function downloadCSV() {
-        let csvContent = "Období;Produkt;Cena (Kč)\n";
-        currentFilteredData.forEach(row => {
-            csvContent += `${row["Měsíce, jejich kumulace, čtvrtletí, roky"]};${row["Reprezentant"]};${row["Hodnota"]}\n`;
-        });
-        const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.setAttribute("href", url);
-        link.setAttribute("download", `data-export.csv`);
-        link.click();
     }
 </script>
 </body>
